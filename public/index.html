@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>POS & E-Invoicing System</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #f4f6f9;
+      --surface: #ffffff;
+      --primary: #1d4ed8;
+      --primary-hover: #1e40af;
+      --text: #111827;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --danger: #dc2626;
+      --danger-bg: #fef2f2;
+      --success: #059669;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); }
+    header { background: #0f172a; color: #fff; padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { font-size: 1.15rem; font-weight: 600; }
+    .tabs { display: flex; gap: 8px; }
+    .tab-btn { background: transparent; color: #cbd5e1; border: 1px solid #334155; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
+    .tab-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .container { max-width: 1200px; margin: 20px auto; padding: 0 16px; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 20px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .kpi-label { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .kpi-val { font-size: 1.5rem; font-weight: 700; margin-top: 6px; }
+    .alert-banner { background: var(--danger-bg); border: 1px solid #fecaca; border-radius: 10px; padding: 14px 16px; margin-bottom: 20px; }
+    .alert-title { color: var(--danger); font-weight: 600; margin-bottom: 8px; font-size: 0.95rem; }
+    .alert-list { display: flex; flex-wrap: wrap; gap: 10px; }
+    .alert-chip { background: #fff; border: 1px solid #fca5a5; padding: 6px 10px; border-radius: 6px; font-size: 0.85rem; display: flex; align-items: center; gap: 8px; }
+    .pos-layout { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; }
+    @media (max-width: 850px) { .pos-layout { grid-template-columns: 1fr; } }
+    .product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-top: 12px; }
+    .product-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px; cursor: pointer; transition: border-color 0.15s; background: #fff; }
+    .product-card:hover { border-color: var(--primary); }
+    .product-card.out { opacity: 0.5; pointer-events: none; }
+    .btn { background: var(--primary); color: #fff; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 0.9rem; }
+    .btn:hover { background: var(--primary-hover); }
+    .btn-sm { padding: 4px 10px; font-size: 0.8rem; }
+    .btn-outline { background: #fff; color: var(--text); border: 1px solid var(--border); }
+    input, select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; margin-top: 4px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9rem; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); }
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
+    .modal { background: #fff; border-radius: 10px; max-width: 460px; width: 100%; padding: 22px; }
+    .receipt-box { border: 1px dashed #9ca3af; padding: 14px; border-radius: 6px; margin: 14px 0; font-family: "Courier New", monospace; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    function App() {
+      const [tab, setTab] = useState('pos');
+      const [products, setProducts] = useState([]);
+      const [taxPresets, setTaxPresets] = useState([]);
+      const [invoices, setInvoices] = useState([]);
+      const [analytics, setAnalytics] = useState({
+        daily_revenue: 0,
+        daily_profit: 0,
+        tax_collected: 0,
+        profit_margin_pct: 0,
+        invoice_count: 0,
+        low_stock_items: []
+      });
+
+      const [search, setSearch] = useState('');
+      const [cart, setCart] = useState([]);
+      const [customerName, setCustomerName] = useState('');
+      const [selectedTaxId, setSelectedTaxId] = useState('bd-standard');
+      const [customTaxRate, setCustomTaxRate] = useState('');
+      const [activeReceipt, setActiveReceipt] = useState(null);
+
+      // New product form state
+      const [newProd, setNewProd] = useState({
+        sku: '', name: '', category: 'Groceries', cost_price: '', selling_price: '', stock_qty: '', low_stock_threshold: '5'
+      });
+
+      const refreshAll = async () => {
+        const [pRes, tRes, iRes, aRes] = await Promise.all([
+          fetch('/api/products').then(r => r.json()),
+          fetch('/api/tax-rates').then(r => r.json()),
+          fetch('/api/invoices').then(r => r.json()),
+          fetch('/api/analytics').then(r => r.json())
+        ]);
+        setProducts(pRes);
+        setTaxPresets(tRes);
+        setInvoices(iRes);
+        setAnalytics(aRes);
+      };
+
+      useEffect(() => { refreshAll(); }, []);
+
+      const addToCart = (product) => {
+        setCart(prev => {
+          const existing = prev.find(item => item.product_id === product.id);
+          if (existing) {
+            if (existing.quantity >= product.stock_qty) return prev;
+            return prev.map(item =>
+              item.product_id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+            );
+          }
+          return [...prev, {
+            product_id: product.id,
+            name: product.name,
+            unit_price: Number(product.selling_price),
+            quantity: 1,
+            max_stock: product.stock_qty
+          }];
+        });
+      };
+
+      const updateCartQty = (productId, delta) => {
+        setCart(prev => prev
+          .map(item => item.product_id === productId ? { ...item, quantity: item.quantity + delta } : item)
+          .filter(item => item.quantity > 0)
+        );
+      };
+
+      const activeTaxPreset = taxPresets.find(t => t.id === selectedTaxId);
+      const effectiveTaxRate = selectedTaxId === 'custom'
+        ? Number(customTaxRate || 0)
+        : Number(activeTaxPreset?.rate ?? 15);
+      const effectiveTaxLabel = selectedTaxId === 'custom'
+        ? `Custom Localized Rate (${effectiveTaxRate}%)`
+        : (activeTaxPreset?.label || 'Standard VAT (15%)');
+
+      const subtotal = cart.reduce((sum, item) => sum + item.unit_price * item.quantity, 0);
+      const taxAmount = Number((subtotal * (effectiveTaxRate / 100)).toFixed(2));
+      const grandTotal = Number((subtotal + taxAmount).toFixed(2));
+
+      const handleCheckout = async () => {
+        if (!cart.length) return;
+        const res = await fetch('/api/invoices', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            customer_name: customerName || 'Walk-in Customer',
+            tax_region: effectiveTaxLabel,
+            tax_rate: effectiveTaxRate,
+            items: cart.map(c => ({ product_id: c.product_id, quantity: c.quantity }))
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data.error || 'Checkout failed');
+          return;
+        }
+        setCart([]);
+        setCustomerName('');
+        setActiveReceipt(data);
+        refreshAll();
+      };
+
+      const handleRestock = async (id) => {
+        await fetch(`/api/products/${id}/restock`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ quantity: 10 })
+        });
+        refreshAll();
+      };
+
+      const handleCreateProduct = async (e) => {
+        e.preventDefault();
+        const res = await fetch('/api/products', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newProd)
+        });
+        if (res.ok) {
+          setNewProd({ sku: '', name: '', category: 'Groceries', cost_price: '', selling_price: '', stock_qty: '', low_stock_threshold: '5' });
+          refreshAll();
+        }
+      };
+
+      const filteredProducts = products.filter(p =>
+        p.name.toLowerCase().includes(search.toLowerCase()) ||
+        p.sku.toLowerCase().includes(search.toLowerCase())
+      );
+
+      return (
+        <div>
+          <header>
+            <h1>RetailPOS & E-Invoicing Engine</h1>
+            <div className="tabs">
+              <button className={`tab-btn ${tab === 'pos' ? 'active' : ''}`} onClick={() => setTab('pos')}>POS Checkout</button>
+              <button className={`tab-btn ${tab === 'inventory' ? 'active' : ''}`} onClick={() => setTab('inventory')}>Inventory</button>
+              <button className={`tab-btn ${tab === 'invoices' ? 'active' : ''}`} onClick={() => setTab('invoices')}>E-Invoice Ledger ({invoices.length})</button>
+            </div>
+          </header>
+
+          <div className="container">
+            {/* Low-Latency Analytics Strip */}
+            <div className="kpi-grid">
+              <div className="card">
+                <div className="kpi-label">Daily Revenue</div>
+                <div className="kpi-val">৳{analytics.daily_revenue.toFixed(2)}</div>
+              </div>
+              <div className="card">
+                <div className="kpi-label">Gross Profit</div>
+                <div className="kpi-val" style={{ color: 'var(--success)' }}>৳{analytics.daily_profit.toFixed(2)}</div>
+              </div>
+              <div className="card">
+                <div className="kpi-label">Profit Margin</div>
+                <div className="kpi-val">{analytics.profit_margin_pct}%</div>
+              </div>
+              <div className="card">
+                <div className="kpi-label">Tax Collected</div>
+                <div className="kpi-val">৳{analytics.tax_collected.toFixed(2)}</div>
+              </div>
+            </div>
+
+            {/* Proactive Low-Stock Alerts */}
+            {analytics.low_stock_items.length > 0 && (
+              <div className="alert-banner">
+                <div className="alert-title">Low-Stock Alerts ({analytics.low_stock_items.length} items need restocking)</div>
+                <div className="alert-list">
+                  {analytics.low_stock_items.map(item => (
+                    <div key={item.id} className="alert-chip">
+                      <span><strong>{item.name}</strong> ({item.stock_qty} left)</span>
+                      <button className="btn btn-sm" onClick={() => handleRestock(item.id)}>+10 Restock</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {tab === 'pos' && (
+              <div className="pos-layout">
+                <div className="card">
+                  <h3>Catalog</h3>
+                  <input
+                    type="text"
+                    placeholder="Search product name or SKU..."
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                  />
+                  <div className="product-grid">
+                    {filteredProducts.map(p => (
+                      <div
+                        key={p.id}
+                        className={`product-card ${p.stock_qty === 0 ? 'out' : ''}`}
+                        onClick={() => addToCart(p)}
+                      >
+                        <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{p.sku} · {p.category}</div>
+                        <div style={{ fontWeight: 600, margin: '4px 0' }}>{p.name}</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                          <strong>৳{Number(p.selling_price).toFixed(2)}</strong>
+                          <span style={{ color: p.stock_qty <= p.low_stock_threshold ? 'var(--danger)' : 'var(--muted)' }}>
+                            Stock: {p.stock_qty}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="card">
+                  <h3>Current Checkout & Tax Engine</h3>
+                  <div style={{ marginTop: 10 }}>
+                    <label style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>Customer Name</label>
+                    <input
+                      type="text"
+                      placeholder="Walk-in Customer"
+                      value={customerName}
+                      onChange={e => setCustomerName(e.target.value)}
+                    />
+                  </div>
+
+                  <div style={{ marginTop: 10 }}>
+                    <label style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>Localized Tax Rule</label>
+                    <select value={selectedTaxId} onChange={e => setSelectedTaxId(e.target.value)}>
+                      {taxPresets.map(t => (
+                        <option key={t.id} value={t.id}>{t.label}</option>
+                      ))}
+                      <option value="custom">Custom Tax Rate (%)</option>
+                    </select>
+                    {selectedTaxId === 'custom' && (
+                      <input
+                        type="number"
+                        step="0.1"
+                        placeholder="Enter tax % (e.g. 10)"
+                        value={customTaxRate}
+                        onChange={e => setCustomTaxRate(e.target.value)}
+                      />
+                    )}
+                  </div>
+
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Item</th>
+                        <th>Qty</th>
+                        <th>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cart.length === 0 ? (
+                        <tr><td colSpan="3" style={{ color: 'var(--muted)' }}>Click items on the left to start billing.</td></tr>
+                      ) : cart.map(item => (
+                        <tr key={item.product_id}>
+                          <td>{item.name}</td>
+                          <td>
+                            <button className="btn btn-sm btn-outline" onClick={() => updateCartQty(item.product_id, -1)}>-</button>
+                            <span style={{ margin: '0 8px' }}>{item.quantity}</span>
+                            <button className="btn btn-sm btn-outline" onClick={() => updateCartQty(item.product_id, 1)}>+</button>
+                          </td>
+                          <td>৳{(item.unit_price * item.quantity).toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 10, fontSize: '0.92rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <span>Subtotal:</span><span>৳{subtotal.toFixed(2)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, color: 'var(--muted)' }}>
+                      <span>Tax ({effectiveTaxRate}%):</span><span>৳{taxAmount.toFixed(2)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: '1.1rem', marginTop: 6 }}>
+                      <span>Grand Total:</span><span>৳{grandTotal.toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  <button
+                    className="btn"
+                    style={{ width: '100%', marginTop: 14 }}
+                    disabled={!cart.length}
+                    onClick={handleCheckout}
+                  >
+                    Generate Compliant E-Invoice
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {tab === 'inventory' && (
+              <div className="card">
+                <h3>Add Product to Inventory</h3>
+                <form onSubmit={handleCreateProduct} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginTop: 10 }}>
+                  <input required placeholder="SKU (e.g. GRO-109)" value={newProd.sku} onChange={e => setNewProd({ ...newProd, sku: e.target.value })} />
+                  <input required placeholder="Product Name" value={newProd.name} onChange={e => setNewProd({ ...newProd, name: e.target.value })} />
+                  <input placeholder="Category" value={newProd.category} onChange={e => setNewProd({ ...newProd, category: e.target.value })} />
+                  <input required type="number" step="0.01" placeholder="Cost Price" value={newProd.cost_price} onChange={e => setNewProd({ ...newProd, cost_price: e.target.value })} />
+                  <input required type="number" step="0.01" placeholder="Selling Price" value={newProd.selling_price} onChange={e => setNewProd({ ...newProd, selling_price: e.target.value })} />
+                  <input required type="number" placeholder="Initial Stock" value={newProd.stock_qty} onChange={e => setNewProd({ ...newProd, stock_qty: e.target.value })} />
+                  <button className="btn" type="submit">Add Item</button>
+                </form>
+
+                <table style={{ marginTop: 20 }}>
+                  <thead>
+                    <tr>
+                      <th>SKU</th>
+                      <th>Product</th>
+                      <th>Cost</th>
+                      <th>Selling</th>
+                      <th>Unit Margin</th>
+                      <th>Stock</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {products.map(p => (
+                      <tr key={p.id}>
+                        <td>{p.sku}</td>
+                        <td>{p.name}</td>
+                        <td>৳{Number(p.cost_price).toFixed(2)}</td>
+                        <td>৳{Number(p.selling_price).toFixed(2)}</td>
+                        <td>৳{(Number(p.selling_price) - Number(p.cost_price)).toFixed(2)}</td>
+                        <td style={{ color: p.stock_qty <= p.low_stock_threshold ? 'var(--danger)' : 'inherit', fontWeight: 600 }}>
+                          {p.stock_qty}
+                        </td>
+                        <td>
+                          <button className="btn btn-sm btn-outline" onClick={() => handleRestock(p.id)}>+10 Stock</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {tab === 'invoices' && (
+              <div className="card">
+                <h3>Compliant E-Invoice Audit Log</h3>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Invoice #</th>
+                      <th>Customer</th>
+                      <th>Tax Region</th>
+                      <th>Subtotal</th>
+                      <th>Tax</th>
+                      <th>Total</th>
+                      <th>Profit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoices.length === 0 ? (
+                      <tr><td colSpan="7" style={{ color: 'var(--muted)' }}>No invoices generated yet. Complete a sale in POS Checkout.</td></tr>
+                    ) : invoices.map(inv => (
+                      <tr key={inv.id}>
+                        <td><strong>{inv.invoice_number}</strong></td>
+                        <td>{inv.customer_name}</td>
+                        <td>{inv.tax_region}</td>
+                        <td>৳{Number(inv.subtotal).toFixed(2)}</td>
+                        <td>৳{Number(inv.tax_amount).toFixed(2)}</td>
+                        <td><strong>৳{Number(inv.total_amount).toFixed(2)}</strong></td>
+                        <td style={{ color: 'var(--success)' }}>+৳{Number(inv.total_profit).toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Digital E-Invoice Receipt Modal */}
+          {activeReceipt && (
+            <div className="modal-backdrop" onClick={() => setActiveReceipt(null)}>
+              <div className="modal" onClick={e => e.stopPropagation()}>
+                <h3>Compliant E-Invoice Generated</h3>
+                <div className="receipt-box">
+                  <div><strong>INVOICE:</strong> {activeReceipt.invoice_number}</div>
+                  <div><strong>DATE:</strong> {new Date(activeReceipt.created_at).toLocaleString()}</div>
+                  <div><strong>CUSTOMER:</strong> {activeReceipt.customer_name}</div>
+                  <div><strong>TAX RULE:</strong> {activeReceipt.tax_region}</div>
+                  <hr style={{ margin: '8px 0' }} />
+                  {activeReceipt.items?.map((item, idx) => (
+                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>{item.product_name} x{item.quantity}</span>
+                      <span>৳{Number(item.line_total).toFixed(2)}</span>
+                    </div>
+                  ))}
+                  <hr style={{ margin: '8px 0' }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Subtotal:</span><span>৳{Number(activeReceipt.subtotal).toFixed(2)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Tax ({activeReceipt.tax_rate}%):</span><span>৳{Number(activeReceipt.tax_amount).toFixed(2)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, marginTop: 4 }}>
+                    <span>TOTAL PAID:</span><span>৳{Number(activeReceipt.total_amount).toFixed(2)}</span>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                  <button className="btn btn-outline" onClick={() => window.print()}>Print Receipt</button>
+                  <button className="btn" onClick={() => setActiveReceipt(null)}>Done</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
